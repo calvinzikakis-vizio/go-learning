@@ -1,12 +1,15 @@
 package handlers
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
+	"log"
 	"net/http"
 	"sqlite/controllers"
 	"sqlite/models"
 	"strconv"
+	"time"
 )
 
 func GetItemHandler(w http.ResponseWriter, r *http.Request, db *sql.DB) {
@@ -134,4 +137,38 @@ func DeleteItemHandler(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func LongRequestHandler(w http.ResponseWriter, ctx context.Context) {
+	for i := 0; i < 20; i++ {
+		select {
+		case <-ctx.Done():
+			log.Printf("Request cancelled")
+			w.WriteHeader(http.StatusRequestTimeout)
+			return
+		default:
+			time.Sleep(1 * time.Second)
+			log.Printf("Request Still Running")
+		}
+	}
+
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte("Long request complete"))
+}
+
+func LongRequestTimeoutHandler(w http.ResponseWriter, ctx context.Context) {
+	for i := 0; i < 20; i++ {
+		select {
+		case <-ctx.Done():
+			log.Printf("Request cancelled")
+			w.WriteHeader(http.StatusRequestTimeout)
+			return
+		default:
+			time.Sleep(1 * time.Second)
+			log.Printf("Request at %d seconds", i)
+		}
+	}
+
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte("Long request complete"))
 }
