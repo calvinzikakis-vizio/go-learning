@@ -6,9 +6,8 @@ import (
 )
 
 type Status struct {
-	Finished chan struct{}
-	Cxt      context.Context
-	Cancel   context.CancelFunc
+	Cxt    context.Context
+	Cancel context.CancelFunc
 }
 type TaskMap struct {
 	sync.Mutex
@@ -25,9 +24,8 @@ func (tm *TaskMap) AddTask(id int, ctx context.Context, cancelFunc context.Cance
 	tm.Lock()
 	defer tm.Unlock()
 	tm.Worker[id] = Status{
-		Finished: make(chan struct{}),
-		Cxt:      ctx,
-		Cancel:   cancelFunc,
+		Cxt:    ctx,
+		Cancel: cancelFunc,
 	}
 }
 
