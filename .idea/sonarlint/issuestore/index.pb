@@ -13,3 +13,6 @@ F
 sqlite/tasking/task.go,a/4/a479149ebbcffb4746949841dfb0993cc719c61e
 E
 sqlite/models/item.go,7/d/7dc8bffc6377bed9c811c2ed3ed94b08bf084092
+:
+
+.gitignore,a/5/a5cc2925ca8258af241be7e5b0381edf30266302
