@@ -16,6 +16,7 @@ func CreateItemTable(db *sql.DB) error {
 	_, err := db.ExecContext(queryCtx, "CREATE TABLE IF NOT EXISTS items (id INTEGER PRIMARY KEY, description TEXT)")
 	return err
 }
+
 func GetItem(db *sql.DB, id int, status tasking.Status) (models.Item, error) {
 	queryCtx, cancel := context.WithTimeout(status.Cxt, 5*time.Second)
 	defer cancel()
