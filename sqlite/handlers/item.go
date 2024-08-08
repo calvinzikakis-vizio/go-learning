@@ -4,15 +4,36 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"log"
+	"errors"
 	"net/http"
 	"sqlite/controllers"
 	"sqlite/models"
+	"sqlite/tasking"
 	"strconv"
-	"time"
 )
 
-func GetItemHandler(w http.ResponseWriter, r *http.Request, db *sql.DB) {
+func ValidateTaskId(w http.ResponseWriter, r *http.Request, tasks *tasking.TaskMap) (int, error) {
+	id := r.URL.Query().Get("taskId")
+	if id == "" {
+		http.Error(w, "taskId parameter is required", http.StatusBadRequest)
+		return 0, errors.New("taskId parameter is required")
+	}
+	//convert the task id to an integer
+	idInt, err := strconv.Atoi(id)
+	if err != nil {
+		http.Error(w, "taskId parameter must be an integer", http.StatusBadRequest)
+		return 0, errors.New("taskId parameter must be an integer")
+	}
+	// verify the task id does not exist in the task map
+	_, exists := tasks.GetTask(idInt)
+	if exists {
+		http.Error(w, "Task already exists", http.StatusConflict)
+		return 0, errors.New("Task already exists")
+	}
+	return idInt, nil
+}
+
+func GetItemHandler(w http.ResponseWriter, r *http.Request, db *sql.DB, tasks *tasking.TaskMap) {
 	id := r.URL.Query().Get("id")
 	if id == "" {
 		http.Error(w, "id parameter is required", http.StatusBadRequest)
@@ -24,8 +45,28 @@ func GetItemHandler(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 		http.Error(w, "id parameter must be an integer", http.StatusBadRequest)
 		return
 	}
+	taskId, err := ValidateTaskId(w, r, tasks)
+	if err != nil {
+		return
+	}
 
-	item, err := controllers.GetItem(db, idInt)
+	// create a new context with cancel from the old one
+	// this will allow us to cancel the request if the task is done
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+
+	// create a new task
+	tasks.AddTask(taskId, ctx, cancel)
+
+	// defer the removal of the task
+	defer tasks.RemoveTask(taskId)
+
+	// get the status of the task
+	status, _ := tasks.GetTask(taskId)
+
+	// below call will be wrapped in the start task function
+	item, err := controllers.GetItem(db, idInt, status)
+
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -39,8 +80,28 @@ func GetItemHandler(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	w.WriteHeader(http.StatusOK)
 }
 
-func GetItemsHandler(w http.ResponseWriter, r *http.Request, db *sql.DB) {
-	items, err := controllers.GetItems(db)
+func GetItemsHandler(w http.ResponseWriter, r *http.Request, db *sql.DB, tasks *tasking.TaskMap) {
+	taskId, err := ValidateTaskId(w, r, tasks)
+	if err != nil {
+		return
+	}
+
+	// create a new context with cancel from the old one
+	// this will allow us to cancel the request if the task is done
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+
+	// create a new task
+	tasks.AddTask(taskId, ctx, cancel)
+
+	// defer the removal of the task
+	defer tasks.RemoveTask(taskId)
+
+	// get the status of the task
+	status, _ := tasks.GetTask(taskId)
+
+	// get the items
+	items, err := controllers.GetItems(db, status)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -54,15 +115,33 @@ func GetItemsHandler(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	w.WriteHeader(http.StatusOK)
 }
 
-func CreateItemHandler(w http.ResponseWriter, r *http.Request, db *sql.DB) {
+func CreateItemHandler(w http.ResponseWriter, r *http.Request, db *sql.DB, tasks *tasking.TaskMap) {
 	var createItem models.CreateItem
 	err := json.NewDecoder(r.Body).Decode(&createItem)
 	if err != nil {
 		http.Error(w, "Request body not valid JSON.", http.StatusBadRequest)
 		return
 	}
+	taskId, err := ValidateTaskId(w, r, tasks)
+	if err != nil {
+		return
+	}
 
-	item, err := controllers.CreateItem(db, createItem.Description)
+	// create a new context with cancel from the old one
+	// this will allow us to cancel the request if the task is done
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+
+	// create a new task
+	tasks.AddTask(taskId, ctx, cancel)
+
+	// defer the removal of the task
+	defer tasks.RemoveTask(taskId)
+
+	// get the status of the task
+	status, _ := tasks.GetTask(taskId)
+
+	item, err := controllers.CreateItem(db, createItem.Description, status)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -76,7 +155,7 @@ func CreateItemHandler(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	w.WriteHeader(http.StatusCreated)
 }
 
-func UpdateItemHandler(w http.ResponseWriter, r *http.Request, db *sql.DB) {
+func UpdateItemHandler(w http.ResponseWriter, r *http.Request, db *sql.DB, tasks *tasking.TaskMap) {
 	id := r.URL.Query().Get("id")
 	if id == "" {
 		http.Error(w, "id parameter is required", http.StatusBadRequest)
@@ -95,15 +174,33 @@ func UpdateItemHandler(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 		http.Error(w, "Request body not valid JSON.", http.StatusBadRequest)
 		return
 	}
+	taskId, err := ValidateTaskId(w, r, tasks)
+	if err != nil {
+		return
+	}
+
+	// create a new context with cancel from the old one
+	// this will allow us to cancel the request if the task is done
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+
+	// create a new task
+	tasks.AddTask(taskId, ctx, cancel)
+
+	// defer the removal of the task
+	defer tasks.RemoveTask(taskId)
+
+	// get the status of the task
+	status, _ := tasks.GetTask(taskId)
 
 	// verify the item exists
-	_, err = controllers.GetItem(db, idInt)
+	_, err = controllers.GetItem(db, idInt, status)
 	if err != nil {
 		http.Error(w, "Item does not exist.", http.StatusNotFound)
 		return
 	}
 
-	err = controllers.UpdateItem(db, idInt, createItem.Description)
+	err = controllers.UpdateItem(db, idInt, createItem.Description, status)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -111,7 +208,7 @@ func UpdateItemHandler(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func DeleteItemHandler(w http.ResponseWriter, r *http.Request, db *sql.DB) {
+func DeleteItemHandler(w http.ResponseWriter, r *http.Request, db *sql.DB, tasks *tasking.TaskMap) {
 	id := r.URL.Query().Get("id")
 	if id == "" {
 		http.Error(w, "id parameter is required", http.StatusBadRequest)
@@ -124,14 +221,33 @@ func DeleteItemHandler(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 		return
 	}
 
+	taskId, err := ValidateTaskId(w, r, tasks)
+	if err != nil {
+		return
+	}
+
+	// create a new context with cancel from the old one
+	// this will allow us to cancel the request if the task is done
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+
+	// create a new task
+	tasks.AddTask(taskId, ctx, cancel)
+
+	// defer the removal of the task
+	defer tasks.RemoveTask(taskId)
+
+	// get the status of the task
+	status, _ := tasks.GetTask(taskId)
+
 	// verify the item exists
-	_, err = controllers.GetItem(db, idInt)
+	_, err = controllers.GetItem(db, idInt, status)
 	if err != nil {
 		http.Error(w, "Item does not exist.", http.StatusNotFound)
 		return
 	}
 
-	err = controllers.DeleteItem(db, idInt)
+	err = controllers.DeleteItem(db, idInt, status)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -139,36 +255,86 @@ func DeleteItemHandler(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func LongRequestHandler(w http.ResponseWriter, ctx context.Context) {
-	for i := 0; i < 20; i++ {
-		select {
-		case <-ctx.Done():
-			log.Printf("Request cancelled")
-			w.WriteHeader(http.StatusRequestTimeout)
-			return
-		default:
-			time.Sleep(1 * time.Second)
-			log.Printf("Request Still Running")
-		}
+func StopTaskHandler(w http.ResponseWriter, r *http.Request, tasks *tasking.TaskMap) {
+	id := r.URL.Query().Get("taskId")
+	if id == "" {
+		http.Error(w, "taskId parameter is required", http.StatusBadRequest)
+		return
 	}
 
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("Long request complete"))
+	idInt, err := strconv.Atoi(id)
+	if err != nil {
+		http.Error(w, "taskId parameter must be an integer", http.StatusBadRequest)
+		return
+	}
+
+	// get the task
+	status, exists := tasks.GetTask(idInt)
+	if !exists {
+		http.Error(w, "Task does not exist.", http.StatusNotFound)
+		return
+	}
+
+	// remove the task
+	status.Cancel()
+	defer tasks.RemoveTask(idInt)
+
+	w.WriteHeader(http.StatusNoContent)
 }
 
-func LongRequestTimeoutHandler(w http.ResponseWriter, ctx context.Context) {
-	for i := 0; i < 20; i++ {
-		select {
-		case <-ctx.Done():
-			log.Printf("Request cancelled")
-			w.WriteHeader(http.StatusRequestTimeout)
-			return
-		default:
-			time.Sleep(1 * time.Second)
-			log.Printf("Request at %d seconds", i)
-		}
+func LongRunningGetHandler(w http.ResponseWriter, r *http.Request, tasks *tasking.TaskMap) {
+	taskId, err := ValidateTaskId(w, r, tasks)
+	if err != nil {
+		return
 	}
 
+	// create a new context with cancel from the old one
+	// this will allow us to cancel the request if the task is done
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+
+	// create a new task
+	tasks.AddTask(taskId, ctx, cancel)
+
+	// defer the removal of the task
+	defer tasks.RemoveTask(taskId)
+
+	// get the status of the task
+	status, _ := tasks.GetTask(taskId)
+
+	// start the long running task
+	res, err := http.NewRequestWithContext(status.Cxt, "GET", "https://fakeresponder.com/?sleep=10000", nil)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	client := http.Client{}
+	resp, err := client.Do(res)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer resp.Body.Close()
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("Long request complete"))
+}
+
+func GetTasksHandler(w http.ResponseWriter, r *http.Request, tasks *tasking.TaskMap) {
+	tasks.Lock()
+	defer tasks.Unlock()
+
+	keys := make([]int, len(tasks.Worker))
+
+	i := 0
+	for k := range tasks.Worker {
+		keys[i] = k
+		i++
+	}
+
+	err := json.NewEncoder(w).Encode(keys)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
 }
