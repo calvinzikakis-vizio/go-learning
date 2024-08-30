@@ -14,8 +14,9 @@ import (
 )
 
 type Env struct {
-	db    *sql.DB
-	tasks *tasking.TaskMap
+	db        *sql.DB
+	tasks     *tasking.TaskMap
+	blockList *authenticate.TokenBlockList
 }
 
 func (env *Env) GetItemsView(w http.ResponseWriter, r *http.Request) {
@@ -59,7 +60,13 @@ func (env *Env) LoginView(w http.ResponseWriter, r *http.Request) {
 }
 
 func (env *Env) ChangePasswordView(w http.ResponseWriter, r *http.Request) {
+	tokenString := r.Header.Get("Authorization")
+	if tokenString == "" {
+		http.Error(w, "Forbidden. `Authorization` Header Required", http.StatusForbidden)
+		return
+	}
 	handlers.ChangePasswordHandler(w, r, env.db)
+	env.blockList.AddToken(tokenString)
 }
 
 func loggingMiddleware(next http.Handler) http.Handler {
@@ -71,33 +78,42 @@ func loggingMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-func authorizationMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		tokenString := r.Header.Get("Authorization")
-		if tokenString == "" {
-			http.Error(w, "Forbidden. `Authorization` Header Required", http.StatusForbidden)
-			return
-		}
-		err := authenticate.VerifyToken(tokenString)
-		if err != nil {
-			http.Error(w, "Forbidden. Invalid Token", http.StatusForbidden)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
+func authorizationMiddleware(blockList *authenticate.TokenBlockList) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			tokenString := r.Header.Get("Authorization")
+			if tokenString == "" {
+				http.Error(w, "Forbidden. `Authorization` Header Required", http.StatusForbidden)
+				return
+			}
+			blockList.RemoveExpiredTokens()
+			err := authenticate.VerifyToken(tokenString, blockList)
+			if err != nil {
+				http.Error(w, "Forbidden. Invalid Token", http.StatusForbidden)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
 }
 
 func main() {
 	db, err := models.NewDB("sqlite.db")
-	defer db.Close()
+	defer func(db *sql.DB) {
+		err := db.Close()
+		if err != nil {
+			log.Panic(err)
+		}
+	}(db)
 	if err != nil {
 		log.Panic(err)
 	}
 
 	env := &Env{
-		db:    db,
-		tasks: tasking.NewTaskMap(),
+		db:        db,
+		tasks:     tasking.NewTaskMap(),
+		blockList: authenticate.NewTokenBlockList(),
 	}
 
 	err = controllers.CreateItemTable(env.db)
@@ -106,13 +122,19 @@ func main() {
 	}
 
 	r := mux.NewRouter()
+	//no auth required
+
 	r.Path("/signup").HandlerFunc(env.SignUpView).Methods("POST")
 	r.Path("/login").HandlerFunc(env.LoginView).Methods("POST")
-	r.Path("/change_password").HandlerFunc(env.ChangePasswordView).Methods("PUT")
 	r.Use(loggingMiddleware)
 
+	// auth required
+	user := r.PathPrefix("/user").Subrouter()
+	user.Path("/change_password").HandlerFunc(env.ChangePasswordView).Methods("PUT")
+	user.Use(authorizationMiddleware(env.blockList))
+
 	api := r.PathPrefix("/api").Subrouter()
-	api.Use(authorizationMiddleware)
+	api.Use(authorizationMiddleware(env.blockList))
 	api.HandleFunc("/items", env.GetItemsView).Methods("GET")
 	api.HandleFunc("/item", env.GetItemView).Methods("GET")
 	api.HandleFunc("/item", env.CreateItemView).Methods("POST")
